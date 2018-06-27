@@ -1,0 +1,17 @@
+use super::Expr;
+
+pub module -> Vec<Expr>
+    = i:(item*) { i }
+
+item -> Expr
+    = e:expression _ "\n"* { e }
+
+expression -> Expr
+    = integer_literal
+
+integer_literal -> Expr
+    = n:$("-"? [0-9]+) { Expr::IntegerLiteral(n.to_owned()) }
+
+_ = [ \t]*
+
+

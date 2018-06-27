@@ -1,0 +1,16 @@
+[package]
+name = "eck"
+version = "0.1.0"
+authors = ["Kevin Watters <kevinwatters@gmail.com>"]
+build = "build.rs"
+
+[dependencies]
+cretonne = { path = "../cretonne/lib/umbrella" }
+cretonne-module = { path = "../cretonne/lib/module" }
+cretonne-faerie = { path = "../cretonne/lib/faerie" }
+failure = "*"
+target-lexicon = "0.0.2"
+peg = "0.5.4"
+
+[build-dependencies]
+peg = "0.5.4"

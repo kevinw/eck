@@ -1,0 +1,3 @@
+#!/bin/bash
+
+cargo watch -q -i "test*" -s "clear && cargo build && ./go debug"
