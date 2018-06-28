@@ -1,15 +1,28 @@
 use super::Expr;
 
 pub module -> Vec<Expr>
+    = statements
+
+statements -> Vec<Expr>
     = i:(item*) { i }
 
 item -> Expr
     = e:expression _ "\n"* { e }
 
 expression -> Expr
-    = i:identifier _ "=" _ s:expression { Expr::Assign(i, Box::new(s)) }
+    = if_expression
+    / b:block { Expr::Block(b) }
+    / i:identifier _ "=" _ s:expression { Expr::Assign(i, Box::new(s)) }
     / sum
     / integer_literal
+
+block -> Vec<Expr>
+    = "{" "\n"* _ body:statements  _ "}" { body }
+
+if_expression -> Expr
+    = "if" _ e:expression _ then_body:block _ "else" _ else_body:block {
+        Expr::If(Box::new(e), then_body, else_body)
+    }
 
 sum -> Expr
     = a:product _ "+"_ b:sum { Expr::Add(Box::new(a), Box::new(b)) }

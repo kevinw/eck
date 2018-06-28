@@ -23,6 +23,8 @@ use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value,
 pub enum Expr {
     IntegerLiteral(String),
     Ref(String),
+    Block(Vec<Expr>),
+    If(Box<Expr>, Vec<Expr>, Vec<Expr>),
     Assign(String, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
@@ -76,6 +78,43 @@ impl<'a> Translator<'a> {
 
     fn translate_expr(&mut self, expr: Expr) -> Value {
         match expr {
+            Expr::If(condition, then_body, else_body) => {
+                let condition_value = self.translate_expr(*condition);
+                
+                let int_type = self.module.pointer_type();
+
+                let else_block = self.builder.create_ebb();
+                let merge_block = self.builder.create_ebb();
+                self.builder.append_ebb_param(merge_block, int_type);
+
+                self.builder.ins().brz(condition_value, else_block, &[]);
+
+                let mut then_return = self.builder.ins().iconst(int_type, 0);
+                for expr in then_body {
+                    then_return = self.translate_expr(expr);
+                }
+                self.builder.ins().jump(merge_block, &[then_return]);
+
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                let mut else_return = self.builder.ins().iconst(int_type, 0);
+                for expr in else_body {
+                    else_return = self.translate_expr(expr);
+                }
+                self.builder.ins().jump(merge_block, &[else_return]);
+
+                self.builder.switch_to_block(merge_block);
+                self.builder.seal_block(merge_block);
+                let phi = self.builder.ebb_params(merge_block)[0];
+                phi
+            }
+            Expr::Block(expressions) => {
+                let mut val = self.builder.ins().iconst(self.module.pointer_type(), 0);
+                for expr in expressions {
+                    val = self.translate_expr(expr);
+                }
+                val
+            }
             Expr::Assign(name, expr) => {
                 let new_value = self.translate_expr(*expr);
                 let variable = self.names.get(&name).expect(&format!("no var named '{}'", name));
