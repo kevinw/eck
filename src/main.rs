@@ -8,11 +8,12 @@ extern crate cretonne_frontend;
 
 use std::fs::File;
 use std::io::Read;
+use cretonne_codegen::verifier::verify_function;
 use cretonne_faerie::{FaerieBackend, FaerieBuilder, FaerieTrapCollection};
 use cretonne_module::{DataContext, Linkage, Module, Writability};
-use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value, Ebb,
-    AbiParam, types, IntCC, Signature, CallConv, settings, FunctionBuilderContext,
-    Configurable, codegen, isa, EntityRef};
+use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value,
+    AbiParam, settings, FunctionBuilderContext,
+    Configurable, codegen, isa};
 use std::str::FromStr;
 use failure::Error;
 
@@ -66,42 +67,26 @@ fn main() -> Result<(), Error> {
     let mut input = String::new();
     File::open("hello.eck")?.read_to_string(&mut input)?;
 
-    //let mut value_from_code: i32 = 9;
-
-    /*
-    match parser::module(&input) {
-        Ok(items) => {
-            match &items[0] {
-                Expr::IntegerLiteral(ref n) => { value_from_code = n.parse().unwrap(); }
-                Expr::Add(a, b) => {
-                }
-            }
-            println!("parsed: {:?}", items);
-        },
-        Err(e) => {
-            eprintln!("error parsing: {:?}", e);
-        }
-    }
-    */
 
     let mut module = Module::<FaerieBackend>::new(make_builder("test.o"));
     let int = module.pointer_type();
 
     let mut func_builder_ctx = FunctionBuilderContext::<Variable>::new();
 
-    let mut data_context = DataContext::new();
-    let mut contents = Vec::<u8>::new();
-    contents.push(0);
-    contents.push(0);
-    contents.push(0);
-    contents.push(0);
-    data_context.define(contents.into_boxed_slice(), Writability::Writable);
-    let data_name = "foo";
-    let data_id = module.declare_data(data_name, Linkage::Export, true)?;
-    module.define_data(data_id, &data_context).unwrap();
-    data_context.clear();
-    module.finalize_data(data_id);
-
+    {
+        let mut data_context = DataContext::new();
+        let mut contents = Vec::<u8>::new();
+        contents.push(0);
+        contents.push(0);
+        contents.push(0);
+        contents.push(0);
+        data_context.define(contents.into_boxed_slice(), Writability::Writable);
+        let data_name = "foo";
+        let data_id = module.declare_data(data_name, Linkage::Export, true)?;
+        module.define_data(data_id, &data_context).unwrap();
+        data_context.clear();
+        module.finalize_data(data_id);
+    }
 
     let mut context: codegen::Context = module.make_context();
     context.func.signature.params.push(AbiParam::new(int));
@@ -133,19 +118,18 @@ fn main() -> Result<(), Error> {
             }
         };
 
-        /*
-        let index:usize = 0;
-        let var = Variable::new(index);
-        trans.builder.declare_var(var, int);
-        let number_value = trans.builder.ins().iconst(int, i64::from(value_from_code));
-        trans.builder.def_var(var, number_value);
-        */
-
         trans.builder.seal_block(entry_ebb);
 
-        //let return_value = trans.builder.use_var(var);
         trans.builder.ins().return_(&[return_value]);
         trans.builder.finalize();
+    }
+
+    {
+        let flags = settings::Flags::new(settings::builder());
+        verify_function(&context.func, &flags).unwrap_or_else(|e| {
+            eprintln!("error verifying function: {:?}", e);
+        });
+        println!("{}", context.func.display(None));
     }
 
     let id = module.declare_function("main", Linkage::Export, &context.func.signature)?;
@@ -158,105 +142,7 @@ fn main() -> Result<(), Error> {
     let file = File::create(product.name()).expect("error opening file");
     product.write(file).expect("error writing to file");
 
-
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn emit_il() {
-
-        use cretonne_codegen::entity::EntityRef;
-        use cretonne_codegen::ir::{ExternalName, Function, Signature, AbiParam, InstBuilder};
-        use cretonne_codegen::ir::types::*;
-        use cretonne_codegen::settings::{self, CallConv};
-        use cretonne_frontend::{FunctionBuilderContext, FunctionBuilder, Variable};
-        use cretonne_codegen::verifier::verify_function;
-
- {
-    let mut sig = Signature::new(CallConv::SystemV);
-    sig.returns.push(AbiParam::new(I32));
-    sig.params.push(AbiParam::new(I32));
-    let mut fn_builder_ctx = FunctionBuilderContext::<Variable>::new();
-    let mut func = Function::with_name_signature(ExternalName::user(0, 0), sig);
-    {
-        let mut builder = FunctionBuilder::<Variable>::new(&mut func, &mut fn_builder_ctx);
-
-        let block0 = builder.create_ebb();
-        let block1 = builder.create_ebb();
-        let block2 = builder.create_ebb();
-        let x = Variable::new(0);
-        let y = Variable::new(1);
-        let z = Variable::new(2);
-        builder.declare_var(x, I32);
-        builder.declare_var(y, I32);
-        builder.declare_var(z, I32);
-        builder.append_ebb_params_for_function_params(block0);
-
-        builder.switch_to_block(block0);
-        builder.seal_block(block0);
-        {
-            let tmp = builder.ebb_params(block0)[0]; // the first function parameter
-            builder.def_var(x, tmp);
-        }
-        {
-            let tmp = builder.ins().iconst(I32, 2);
-            builder.def_var(y, tmp);
-        }
-        {
-            let arg1 = builder.use_var(x);
-            let arg2 = builder.use_var(y);
-            let tmp = builder.ins().iadd(arg1, arg2);
-            builder.def_var(z, tmp);
-        }
-        builder.ins().jump(block1, &[]);
-
-        builder.switch_to_block(block1);
-        {
-            let arg1 = builder.use_var(y);
-            let arg2 = builder.use_var(z);
-            let tmp = builder.ins().iadd(arg1, arg2);
-            builder.def_var(z, tmp);
-        }
-        {
-            let arg = builder.use_var(y);
-            builder.ins().brnz(arg, block2, &[]);
-        }
-        {
-            let arg1 = builder.use_var(z);
-            let arg2 = builder.use_var(x);
-            let tmp = builder.ins().isub(arg1, arg2);
-            builder.def_var(z, tmp);
-        }
-        {
-            let arg = builder.use_var(y);
-            builder.ins().return_(&[arg]);
-        }
-
-        builder.switch_to_block(block2);
-        builder.seal_block(block2);
-
-        {
-            let arg1 = builder.use_var(y);
-            let arg2 = builder.use_var(x);
-            let tmp = builder.ins().isub(arg1, arg2);
-            builder.def_var(y, tmp);
-        }
-        builder.ins().jump(block1, &[]);
-        builder.seal_block(block1);
-
-        builder.finalize();
-    }
-
-    let flags = settings::Flags::new(settings::builder());
-    let res = verify_function(&func, &flags);
-    println!("{}", func.display(None));
-    match res {
-        Ok(_) => {}
-        Err(err) => panic!("{}", err),
-    }
-}
-    }
-}
 
