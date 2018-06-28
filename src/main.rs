@@ -24,12 +24,16 @@ pub enum Expr {
     IntegerLiteral(String),
     Ref(String),
     Block(Vec<Expr>),
-    If(Box<Expr>, Vec<Expr>, Vec<Expr>),
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
     Assign(String, Box<Expr>),
     Add(Box<Expr>, Box<Expr>),
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Func {
+        params: Vec<String>,
+        block: Box<Expr>, // block
+    },
     Nil,
 }
 
@@ -79,38 +83,40 @@ impl<'a> Translator<'a> {
 
     fn translate_expr(&mut self, expr: Expr) -> Value {
         match expr {
+            Expr::Func { params: _, block } => {
+                let b = *block;
+                match &b {
+                    Expr::Block(_statements) => self.translate_expr(b.clone()), // TODO: how to remove this clone?
+                    _ => panic!("function block expected to be an Expr::Block")
+                }
+            },
             Expr::Nil => {
-                panic!("nil");
+                let int_type = self.module.pointer_type();
+                self.builder.ins().iconst(int_type, 0) // TODO: this isn't right
             }
 
-            Expr::If(condition, then_body, else_body) => {
+            Expr::If(condition, then_block, else_block) => {
                 let condition_value = self.translate_expr(*condition);
                 
                 let int_type = self.module.pointer_type();
 
-                let else_block = self.builder.create_ebb();
-                let merge_block = self.builder.create_ebb();
-                self.builder.append_ebb_param(merge_block, int_type);
+                let else_ebb = self.builder.create_ebb();
+                let merge_ebb = self.builder.create_ebb();
+                self.builder.append_ebb_param(merge_ebb, int_type);
 
-                self.builder.ins().brz(condition_value, else_block, &[]);
+                self.builder.ins().brz(condition_value, else_ebb, &[]);
 
-                let mut then_return = self.builder.ins().iconst(int_type, 0);
-                for expr in then_body {
-                    then_return = self.translate_expr(expr);
-                }
-                self.builder.ins().jump(merge_block, &[then_return]);
+                let then_return = self.translate_expr(*then_block);
+                self.builder.ins().jump(merge_ebb, &[then_return]);
 
-                self.builder.switch_to_block(else_block);
-                self.builder.seal_block(else_block);
-                let mut else_return = self.builder.ins().iconst(int_type, 0);
-                for expr in else_body {
-                    else_return = self.translate_expr(expr);
-                }
-                self.builder.ins().jump(merge_block, &[else_return]);
+                self.builder.switch_to_block(else_ebb);
+                self.builder.seal_block(else_ebb);
+                let else_return = self.translate_expr(*else_block);
+                self.builder.ins().jump(merge_ebb, &[else_return]);
 
-                self.builder.switch_to_block(merge_block);
-                self.builder.seal_block(merge_block);
-                let phi = self.builder.ebb_params(merge_block)[0];
+                self.builder.switch_to_block(merge_ebb);
+                self.builder.seal_block(merge_ebb);
+                let phi = self.builder.ebb_params(merge_ebb)[0];
                 phi
             }
             Expr::Block(expressions) => {

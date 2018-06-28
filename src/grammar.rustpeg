@@ -9,23 +9,29 @@ items -> Vec<Expr>
 item -> Expr
     = _ e:expression _ ";" _ { e }
 
+//function -> Expr
+//    = "(" params:((_ i:identifier _{i}) ** ",") ")" _
+//    block:block
+//    { Expr::Func { params: params, block: Box::<Expr>::new(block) } }
+
 expression -> Expr
     = if_expression
-    / b:block { Expr::Block(b) }
+    / block
     / i:identifier _ "=" _ s:expression { Expr::Assign(i, Box::new(s)) }
     / sum
     / integer_literal
 
-block -> Vec<Expr>
-    = "{"  _ body:items end_expr:expression? _ "}" { 
-        let mut v = body.clone();
-        v.push(end_expr.unwrap_or(Expr::Nil));
-        v
-    }
+block -> Expr
+    = "{"  _ body:items end_expr:expression? _ "}"
+      { 
+          let mut v = body.clone();
+          v.push(end_expr.unwrap_or(Expr::Nil));
+          Expr::Block(v)
+      }
 
 if_expression -> Expr
-    = "if" _ e:expression _ then_body:block _ "else" _ else_body:block {
-        Expr::If(Box::new(e), then_body, else_body)
+    = "if" _ e:expression _ then_block:block _ "else" _ else_block:block {
+        Expr::If(Box::new(e), Box::new(then_block), Box::new(else_block))
     }
 
 sum -> Expr
