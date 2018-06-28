@@ -19,7 +19,7 @@ use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value,
     AbiParam, settings, FunctionBuilderContext,
     Configurable, codegen, isa, EntityRef};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     IntegerLiteral(String),
     Ref(String),
@@ -30,6 +30,7 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
+    Nil,
 }
 
 mod parser {
@@ -78,6 +79,10 @@ impl<'a> Translator<'a> {
 
     fn translate_expr(&mut self, expr: Expr) -> Value {
         match expr {
+            Expr::Nil => {
+                panic!("nil");
+            }
+
             Expr::If(condition, then_body, else_body) => {
                 let condition_value = self.translate_expr(*condition);
                 
@@ -122,7 +127,7 @@ impl<'a> Translator<'a> {
                 new_value
             }
             Expr::Ref(name) => {
-                let variable = self.names.get(&name).unwrap();
+                let variable = self.names.get(&name).expect(&format!("no var named '{}'", name));
                 self.builder.use_var(*variable)
             }
             Expr::Add(lhs, rhs) => {

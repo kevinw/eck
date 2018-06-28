@@ -1,13 +1,13 @@
 use super::Expr;
 
 pub module -> Vec<Expr>
-    = statements
+    = items
 
-statements -> Vec<Expr>
+items -> Vec<Expr>
     = i:(item*) { i }
 
 item -> Expr
-    = e:expression _ "\n"* { e }
+    = _ e:expression _ ";" _ { e }
 
 expression -> Expr
     = if_expression
@@ -17,7 +17,11 @@ expression -> Expr
     / integer_literal
 
 block -> Vec<Expr>
-    = "{" "\n"* _ body:statements  _ "}" { body }
+    = "{"  _ body:items end_expr:expression? _ "}" { 
+        let mut v = body.clone();
+        v.push(end_expr.unwrap_or(Expr::Nil));
+        v
+    }
 
 if_expression -> Expr
     = "if" _ e:expression _ then_body:block _ "else" _ else_body:block {
@@ -44,6 +48,6 @@ identifier -> String
 integer_literal -> Expr
     = n:$("-"? [0-9]+) { Expr::IntegerLiteral(n.to_owned()) }
 
-_ = [ \t]*
+_ = [ \t\n!.]*
 
 
