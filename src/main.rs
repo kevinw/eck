@@ -21,6 +21,9 @@ use failure::Error;
 pub enum Expr {
     IntegerLiteral(String),
     Add(Box<Expr>, Box<Expr>),
+    Sub(Box<Expr>, Box<Expr>),
+    Mul(Box<Expr>, Box<Expr>),
+    Div(Box<Expr>, Box<Expr>),
 }
 
 mod parser {
@@ -54,6 +57,21 @@ impl<'a> Translator<'a> {
                 let lhs = self.translate_expr(*lhs);
                 let rhs = self.translate_expr(*rhs);
                 self.builder.ins().iadd(lhs, rhs)
+            }
+            Expr::Sub(lhs, rhs) => {
+                let lhs = self.translate_expr(*lhs);
+                let rhs = self.translate_expr(*rhs);
+                self.builder.ins().isub(lhs, rhs)
+            }
+            Expr::Mul(lhs, rhs) => {
+                let lhs = self.translate_expr(*lhs);
+                let rhs = self.translate_expr(*rhs);
+                self.builder.ins().imul(lhs, rhs)
+            }
+            Expr::Div(lhs, rhs) => {
+                let lhs = self.translate_expr(*lhs);
+                let rhs = self.translate_expr(*rhs);
+                self.builder.ins().udiv(lhs, rhs)
             }
             Expr::IntegerLiteral(n) => {
                 let integer_value:i32 = n.parse().unwrap();

@@ -11,9 +11,14 @@ expression -> Expr
     / integer_literal
 
 sum -> Expr
-    = a:integer_literal _ "+"_ b:sum { Expr::Add(Box::new(a), Box::new(b)) }
-    / integer_literal
+    = a:product _ "+"_ b:sum { Expr::Add(Box::new(a), Box::new(b)) }
+    / a:product _ "-"_ b:sum { Expr::Sub(Box::new(a), Box::new(b)) }
+    / product
 
+product -> Expr
+    = a:integer_literal _ "*" _ b:product { Expr::Mul(Box::new(a), Box::new(b)) }
+    / a:integer_literal _ "/" _ b:product { Expr::Div(Box::new(a), Box::new(b)) }
+    / integer_literal
 
 integer_literal -> Expr
     = n:$("-"? [0-9]+) { Expr::IntegerLiteral(n.to_owned()) }
