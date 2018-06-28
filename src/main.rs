@@ -67,6 +67,26 @@ impl Scope {
 
 }
 
+fn lookup_variable(scopes:&mut Vec<Scope>, name: &str) -> Option<Variable> {
+    let mut index = scopes.len() - 1;
+
+    loop {
+        let scope = &mut scopes[index];
+        match scope.names.get_mut(name) {
+            Some(variable) => { return Some(variable.clone()); }
+            None => {}
+        }
+
+        index -= 1;
+        if index == 0 {
+            break;
+        }
+    }
+
+    None
+}
+
+
 struct Translator<'a> {
     builder: FunctionBuilder<'a, Variable>,
     module: &'a mut Module<FaerieBackend>,
@@ -94,7 +114,8 @@ impl<'a> Translator<'a> {
         for (index, variable_name) in variable_names.iter().enumerate() {
             let x = Variable::new(index);
             self.builder.declare_var(x, self.module.pointer_type());
-            let scope = &mut self.scopes[0];
+            let index = self.scopes.len() - 1;
+            let scope = &mut self.scopes[index];
             scope.names.insert(variable_name.to_string(), x);
         }
     }
@@ -161,15 +182,13 @@ impl<'a> Translator<'a> {
             }
             Expr::Assign(name, expr) => {
                 let new_value = self.translate_expr(*expr);
-                let scope = &mut self.scopes[0];
-                let variable = scope.names.get(&name).expect(&format!("no var named '{}'", name));
-                self.builder.def_var(*variable, new_value);
+                let variable = lookup_variable(&mut self.scopes, &name).expect(&format!("variable lookup failed: {}", name));
+                self.builder.def_var(variable, new_value);
                 new_value
             }
             Expr::Ref(name) => {
-                let scope = &mut self.scopes[0];
-                let variable = scope.names.get(&name).expect(&format!("no var named '{}'", name));
-                self.builder.use_var(*variable)
+                let variable = lookup_variable(&mut self.scopes, &name).expect(&format!("variable lookup failed: {}", name));
+                self.builder.use_var(variable)
             }
             Expr::Add(lhs, rhs) => {
                 let lhs = self.translate_expr(*lhs);
