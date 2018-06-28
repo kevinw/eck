@@ -1,10 +1,13 @@
-- variable assignment
-- blocks with return values like the simple cretone example
+- blocks introduce scope
+- functions
 - string literals
 - extern function declaration -> puts
 - type inference and an error when trying "1" + 2
 - setup rustfmt and clippy
+- monomorphization https://github.com/swgillespie/pine/blob/master/pine_trans/src/monomorphize.rs
 
 - try cretonne to llvm ir translator for optimized builds https://github.com/tyler/cton2llvm
 
 x show ir output (inline?)
+x variable assignment
+x blocks with return values like the simple cretone example

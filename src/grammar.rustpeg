@@ -9,16 +9,17 @@ items -> Vec<Expr>
 item -> Expr
     = _ e:expression _ ";" _ { e }
 
-//function -> Expr
-//    = "(" params:((_ i:identifier _{i}) ** ",") ")" _
-//    block:block
-//    { Expr::Func { params: params, block: Box::<Expr>::new(block) } }
+function -> Expr
+    = "(" params:((_ i:identifier _{i}) ** ",") ")" _
+    block:block
+    { Expr::Func { params: params, block: Box::new(block) } }
 
 expression -> Expr
     = if_expression
     / block
     / i:identifier _ "=" _ s:expression { Expr::Assign(i, Box::new(s)) }
     / sum
+    / function
     / integer_literal
 
 block -> Expr

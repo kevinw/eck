@@ -19,6 +19,7 @@ use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value,
     AbiParam, settings, FunctionBuilderContext,
     Configurable, codegen, isa, EntityRef};
 
+
 #[derive(Debug, Clone)]
 pub enum Expr {
     IntegerLiteral(String),
@@ -49,20 +50,36 @@ fn make_builder(name: &str) -> FaerieBuilder {
     let builder = FaerieBuilder::new(
         isa,
         name.to_owned(),
-        target_lexicon::BinaryFormat::Macho,
         FaerieTrapCollection::Disabled,
         FaerieBuilder::default_libcall_names(),
     ).unwrap();
     builder
 }
 
+struct Scope {
+    names: HashMap<String, Variable>,
+}
+
+impl Scope {
+    fn new() -> Scope {
+        Scope { names: HashMap::new() }
+    }
+
+}
+
 struct Translator<'a> {
     builder: FunctionBuilder<'a, Variable>,
     module: &'a mut Module<FaerieBackend>,
-    names: &'a mut HashMap<String, Variable>,
+    scopes: Vec<Scope>,
+    //names: &'a mut HashMap<String, Variable>,
 }
 
 impl<'a> Translator<'a> {
+    fn new(module: &'a mut Module<FaerieBackend>, builder: FunctionBuilder<'a, Variable>) -> Translator<'a> {
+        let scopes = vec![Scope::new()];
+        Translator { module, builder, scopes }
+    }
+
     fn declare_variables(&mut self, exprs: &[Expr]) {
         let mut variable_names = HashSet::new();
         for expr in exprs {
@@ -77,8 +94,29 @@ impl<'a> Translator<'a> {
         for (index, variable_name) in variable_names.iter().enumerate() {
             let x = Variable::new(index);
             self.builder.declare_var(x, self.module.pointer_type());
-            self.names.insert(variable_name.to_string(), x);
+            let scope = &mut self.scopes[0];
+            scope.names.insert(variable_name.to_string(), x);
         }
+    }
+
+    fn new_scope(&mut self) {
+        self.scopes.push(Scope::new());
+    }
+
+    fn end_scope(&mut self) {
+        let length = self.scopes.len();
+        self.scopes.remove(length - 1);
+    }
+
+    fn translate_block_expressions(&mut self, expressions: Vec<Expr>) -> Value {
+        self.new_scope();
+        self.declare_variables(&expressions);
+        let mut val = self.builder.ins().iconst(self.module.pointer_type(), 0);
+        for expr in expressions {
+            val = self.translate_expr(expr);
+        }
+        self.end_scope();
+        val
     }
 
     fn translate_expr(&mut self, expr: Expr) -> Value {
@@ -90,19 +128,17 @@ impl<'a> Translator<'a> {
                     _ => panic!("function block expected to be an Expr::Block")
                 }
             },
+
             Expr::Nil => {
-                let int_type = self.module.pointer_type();
-                self.builder.ins().iconst(int_type, 0) // TODO: this isn't right
+                self.builder.ins().iconst(self.module.pointer_type(), 0) // TODO: this isn't right
             }
 
             Expr::If(condition, then_block, else_block) => {
                 let condition_value = self.translate_expr(*condition);
                 
-                let int_type = self.module.pointer_type();
-
                 let else_ebb = self.builder.create_ebb();
                 let merge_ebb = self.builder.create_ebb();
-                self.builder.append_ebb_param(merge_ebb, int_type);
+                self.builder.append_ebb_param(merge_ebb, self.module.pointer_type());
 
                 self.builder.ins().brz(condition_value, else_ebb, &[]);
 
@@ -116,24 +152,23 @@ impl<'a> Translator<'a> {
 
                 self.builder.switch_to_block(merge_ebb);
                 self.builder.seal_block(merge_ebb);
+
                 let phi = self.builder.ebb_params(merge_ebb)[0];
                 phi
             }
             Expr::Block(expressions) => {
-                let mut val = self.builder.ins().iconst(self.module.pointer_type(), 0);
-                for expr in expressions {
-                    val = self.translate_expr(expr);
-                }
-                val
+                self.translate_block_expressions(expressions)
             }
             Expr::Assign(name, expr) => {
                 let new_value = self.translate_expr(*expr);
-                let variable = self.names.get(&name).expect(&format!("no var named '{}'", name));
+                let scope = &mut self.scopes[0];
+                let variable = scope.names.get(&name).expect(&format!("no var named '{}'", name));
                 self.builder.def_var(*variable, new_value);
                 new_value
             }
             Expr::Ref(name) => {
-                let variable = self.names.get(&name).expect(&format!("no var named '{}'", name));
+                let scope = &mut self.scopes[0];
+                let variable = scope.names.get(&name).expect(&format!("no var named '{}'", name));
                 self.builder.use_var(*variable)
             }
             Expr::Add(lhs, rhs) => {
@@ -164,6 +199,24 @@ impl<'a> Translator<'a> {
     }
 }
 
+fn _define_data<T>(module: &mut Module<T>) -> Result<(), Error>
+    where T: cretonne_module::Backend 
+{
+    let mut data_context = DataContext::new();
+    let mut contents = Vec::<u8>::new();
+    contents.push(0);
+    contents.push(0);
+    contents.push(0);
+    contents.push(0);
+    data_context.define(contents.into_boxed_slice(), Writability::Writable);
+    let data_name = "foo";
+    let data_id = module.declare_data(data_name, Linkage::Export, true)?;
+    module.define_data(data_id, &data_context).unwrap();
+    data_context.clear();
+    module.finalize_data(data_id);
+    Ok(())
+}
+
 fn main() -> Result<(), Error> {
     let mut input = String::new();
     File::open("hello.eck")?.read_to_string(&mut input)?;
@@ -173,30 +226,15 @@ fn main() -> Result<(), Error> {
 
     let mut func_builder_ctx = FunctionBuilderContext::<Variable>::new();
 
-    {
-        let mut data_context = DataContext::new();
-        let mut contents = Vec::<u8>::new();
-        contents.push(0);
-        contents.push(0);
-        contents.push(0);
-        contents.push(0);
-        data_context.define(contents.into_boxed_slice(), Writability::Writable);
-        let data_name = "foo";
-        let data_id = module.declare_data(data_name, Linkage::Export, true)?;
-        module.define_data(data_id, &data_context).unwrap();
-        data_context.clear();
-        module.finalize_data(data_id);
-    }
-
     let mut context: codegen::Context = module.make_context();
     context.func.signature.params.push(AbiParam::new(int));
     context.func.signature.params.push(AbiParam::new(int));
     context.func.signature.returns.push(AbiParam::new(int));
 
+
     {
         let builder = FunctionBuilder::<Variable>::new(&mut context.func, &mut func_builder_ctx);
-        let mut names = HashMap::new();
-        let mut trans = Translator { module: &mut module, builder: builder, names: &mut names };
+        let mut trans = Translator::new(&mut module, builder);
         let entry_ebb = trans.builder.create_ebb();
         trans.builder.append_ebb_params_for_function_params(entry_ebb);
         trans.builder.switch_to_block(entry_ebb);
@@ -206,17 +244,10 @@ fn main() -> Result<(), Error> {
             eprintln!("error parsing: {:?}", e);
             std::process::exit(1);
         });
-        trans.declare_variables(&items);
 
-        let return_value = {
-            println!("parsed: {:?}", items);
-            let mut last_value:Value = Value::with_number(0).unwrap(); // TODO: how to not have a value
-            for item in items {
-                last_value = trans.translate_expr(item);
-            }
-            last_value
-        };
+        println!("parsed: {:?}", items);
 
+        let return_value = trans.translate_block_expressions(items);
         trans.builder.ins().return_(&[return_value]);
         trans.builder.finalize();
     }
@@ -226,6 +257,8 @@ fn main() -> Result<(), Error> {
         verify_function(&context.func, &flags).unwrap_or_else(|e| {
             eprintln!("error verifying function: {:?}", e);
         });
+
+        // show ir
         println!("{}", context.func.display(None));
     }
 
@@ -240,6 +273,58 @@ fn main() -> Result<(), Error> {
     product.write(file).expect("error writing to file");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use cretonne::codegen::scoped_hash_map::Entry::*;
+    use cretonne::codegen::scoped_hash_map::ScopedHashMap;
+
+    type ScopeVars = ScopedHashMap<String, Variable>;
+
+    fn ensure_vacant_and_insert(vals: &mut ScopeVars, key: &str, var: Variable) {
+        let entry = vals.entry(key.into());
+
+        match entry {
+            Occupied(_) => {
+                let msg = format!("shouldn't have an entry for {}", key);
+                panic!(msg);
+            },
+            Vacant(entry) => {
+                entry.insert(var);
+            },
+        };
+
+        ()
+    }
+
+    fn ensure_vacant(vals: &mut ScopeVars, key: &str) {
+        match vals.entry(key.into()) {
+            Occupied(_) => { panic!("expected vacant"); }
+            Vacant(_) => { }
+        }
+    }
+
+    #[test]
+    fn test_scoped_hashmap() {
+        let mut vals: ScopedHashMap<String, Variable> = ScopedHashMap::new();
+
+        vals.increment_depth();
+
+        ensure_vacant_and_insert(&mut vals, "foo", Variable::with_u32(0));
+
+        match vals.entry("foo".into()) {
+            Vacant(_) => panic!(),
+            Occupied(entry) => {
+                assert!(entry.get().index() == 0);
+            }
+        }
+
+        vals.decrement_depth();
+
+        ensure_vacant(&mut vals, "foo");
+    }
 }
 
 
