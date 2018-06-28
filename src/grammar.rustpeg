@@ -7,7 +7,13 @@ item -> Expr
     = e:expression _ "\n"* { e }
 
 expression -> Expr
-    = integer_literal
+    = sum
+    / integer_literal
+
+sum -> Expr
+    = a:integer_literal _ "+"_ b:sum { Expr::Add(Box::new(a), Box::new(b)) }
+    / integer_literal
+
 
 integer_literal -> Expr
     = n:$("-"? [0-9]+) { Expr::IntegerLiteral(n.to_owned()) }

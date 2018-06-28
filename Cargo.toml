@@ -8,6 +8,8 @@ build = "build.rs"
 cretonne = { path = "../cretonne/lib/umbrella" }
 cretonne-module = { path = "../cretonne/lib/module" }
 cretonne-faerie = { path = "../cretonne/lib/faerie" }
+cretonne-codegen = { path = "../cretonne/lib/codegen" }
+cretonne-frontend = { path = "../cretonne/lib/frontend" }
 failure = "*"
 target-lexicon = "0.0.2"
 peg = "0.5.4"

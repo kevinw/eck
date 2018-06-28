@@ -1,0 +1,2 @@
+- starting with 1, then 1 + 1, then 1 + 1 + 1
+- important questions early on: how to parallelize the compiler
