@@ -7,7 +7,8 @@ item -> Expr
     = e:expression _ "\n"* { e }
 
 expression -> Expr
-    = sum
+    = i:identifier _ "=" _ s:expression { Expr::Assign(i, Box::new(s)) }
+    / sum
     / integer_literal
 
 sum -> Expr
@@ -16,9 +17,16 @@ sum -> Expr
     / product
 
 product -> Expr
-    = a:integer_literal _ "*" _ b:product { Expr::Mul(Box::new(a), Box::new(b)) }
-    / a:integer_literal _ "/" _ b:product { Expr::Div(Box::new(a), Box::new(b)) }
+    = a:ref_or_literal _ "*" _ b:product { Expr::Mul(Box::new(a), Box::new(b)) }
+    / a:ref_or_literal _ "/" _ b:product { Expr::Div(Box::new(a), Box::new(b)) }
+    / ref_or_literal
+
+ref_or_literal -> Expr
+    = i:identifier { Expr::Ref(i) }
     / integer_literal
+
+identifier -> String
+    = n:$([a-zA-Z]+) { n.to_owned() }
 
 integer_literal -> Expr
     = n:$("-"? [0-9]+) { Expr::IntegerLiteral(n.to_owned()) }
