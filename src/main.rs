@@ -6,13 +6,14 @@ extern crate cretonne_codegen;
 extern crate cretonne_frontend;
 #[macro_use] extern crate target_lexicon;
 
+use std::cell::RefCell;
 use std::collections::{HashMap};
 use std::fs::File;
 use std::io::Read;
 use std::str::FromStr;
 use failure::Error;
 
-use cretonne_codegen::verifier::verify_function;
+//use cretonne_codegen::verifier::verify_function;
 use cretonne_faerie::{FaerieBackend, FaerieBuilder, FaerieTrapCollection};
 use cretonne_module::{DataContext, Linkage, Module, Writability};
 use cretonne::prelude::{FunctionBuilder, Variable, InstBuilder, Value,
@@ -31,10 +32,7 @@ pub enum Expr {
     Sub(Box<Expr>, Box<Expr>),
     Mul(Box<Expr>, Box<Expr>),
     Div(Box<Expr>, Box<Expr>),
-    Func {
-        params: Vec<String>,
-        block: Box<Expr>, // block
-    },
+    Func { params: Vec<String>, block: Box<Expr> },
     Nil,
 }
 
@@ -44,16 +42,15 @@ mod parser {
 
 fn make_builder(name: &str) -> FaerieBuilder {
     let mut flag_builder = settings::builder();
-    flag_builder.enable("is_pic").unwrap();
-    let isa_builder = isa::lookup(triple!("x86_64-unknown-unknown-macho")).unwrap();
-    let isa = isa_builder.finish(settings::Flags::new(flag_builder));
-    let builder = FaerieBuilder::new(
-        isa,
+    flag_builder.enable("is_pic").expect("error enabling is_pic");
+    let isa_builder = isa::lookup(triple!("x86_64-unknown-unknown-macho"))
+        .expect("error configuring platform triple");
+    FaerieBuilder::new(
+        isa_builder.finish(settings::Flags::new(flag_builder)),
         name.to_owned(),
         FaerieTrapCollection::Disabled,
         FaerieBuilder::default_libcall_names(),
-    ).unwrap();
-    builder
+    ).expect("error creating faeriebuilder")
 }
 
 struct Scope {
@@ -68,6 +65,7 @@ impl Scope {
 
 struct Translator<'a> {
     builder: FunctionBuilder<'a, Variable>,
+    codegen_context: &'a RefCell<codegen::Context>,
     module: &'a mut Module<FaerieBackend>,
     scopes: Vec<Scope>,
     next_variable_index: usize,
@@ -75,12 +73,18 @@ struct Translator<'a> {
 }
 
 impl<'a> Translator<'a> {
-    fn new(module: &'a mut Module<FaerieBackend>, builder: FunctionBuilder<'a, Variable>) -> Translator<'a> {
+    fn new(
+        module: &'a mut Module<FaerieBackend>,
+        builder: FunctionBuilder<'a, Variable>,
+        codegen_context: &'a RefCell<codegen::Context>,
+
+    ) -> Translator<'a> {
         let scopes = vec![Scope::new()];
         Translator {
             module,
             builder,
             scopes,
+            codegen_context,
             next_variable_index: 0,
         }
     }
@@ -133,7 +137,7 @@ impl<'a> Translator<'a> {
         }
 
         // TODO: collect
-        let mut val = self.builder.ins().iconst(self.module.pointer_type(), 0);
+        let mut val = Value::with_number(0).unwrap(); // TODO: not correct
         for expr in expressions {
             val = self.translate_expr(expr);
         }
@@ -147,13 +151,29 @@ impl<'a> Translator<'a> {
     fn translate_expr(&mut self, expr: Expr) -> Value {
         match expr {
             Expr::Func { params, block } => {
+
+                let int = self.module.pointer_type();
+                for _i in 0..params.len() {
+                    self.builder.func.signature.params.push(AbiParam::new(int));
+                }
+                self.builder.func.signature.returns.push(AbiParam::new(int));
+
+                let entry_ebb = self.builder.create_ebb();
+                self.builder.append_ebb_params_for_function_params(entry_ebb);
+                self.builder.switch_to_block(entry_ebb);
+                self.builder.seal_block(entry_ebb);
+
                 let b = *block;
-                match &b {
+                let return_value = match &b {
                     Expr::Block(statements) => {
                         self.translate_block_expressions(statements.clone(), Some(params)) // TODO @Slow: .clone()
                     }
                     _ => panic!("function block expected to be an Expr::Block")
-                }
+                };
+
+                self.builder.ins().return_(&[return_value]);
+                self.builder.finalize();
+                return_value
             },
 
             Expr::Nil => {
@@ -187,13 +207,31 @@ impl<'a> Translator<'a> {
                 self.translate_block_expressions(expressions, None)
             }
             Expr::Assign(name, expr) => {
-                let new_value = self.translate_expr(*expr);
-                let variable = match self.lookup_variable(&name) {
-                    Some(variable) => variable,
-                    None => self.declare_variable(&name),
-                };
-                self.builder.def_var(variable, new_value);
-                new_value
+                match *expr {
+                    Expr::Func { .. } => {
+                        let func_value = self.translate_expr(*expr);
+
+                        let id = self.module.declare_function(&name, Linkage::Export, &self.builder.func.signature).unwrap();
+                        {
+                            let codegen_context = &mut self.codegen_context.borrow_mut();
+                            self.module.define_function(id, codegen_context).expect("error defining module function");
+                            self.module.clear_context(codegen_context);
+                            self.module.finalize_function(id);
+                        }
+
+                        func_value
+                    }
+                    _ => {
+                        let variable = match self.lookup_variable(&name) {
+                            Some(variable) => variable,
+                            None => self.declare_variable(&name),
+                        };
+
+                        let new_value = self.translate_expr(*expr);
+                        self.builder.def_var(variable, new_value);
+                        new_value
+                    }
+                }
             }
             Expr::Ref(name) => {
                 let variable = self.lookup_variable(&name).expect(&format!("variable lookup failed: {}", name));
@@ -220,7 +258,7 @@ impl<'a> Translator<'a> {
                 self.builder.ins().udiv(lhs, rhs)
             }
             Expr::IntegerLiteral(n) => {
-                let integer_value:i32 = n.parse().unwrap();
+                let integer_value:i32 = n.parse().expect("expected a successful integer value parse");
                 self.builder.ins().iconst(self.module.pointer_type(), i64::from(integer_value))
             }
         }
@@ -239,7 +277,7 @@ fn _define_data<T>(module: &mut Module<T>) -> Result<(), Error>
     data_context.define(contents.into_boxed_slice(), Writability::Writable);
     let data_name = "foo";
     let data_id = module.declare_data(data_name, Linkage::Export, true)?;
-    module.define_data(data_id, &data_context).unwrap();
+    module.define_data(data_id, &data_context).expect("error defining module data");
     data_context.clear();
     module.finalize_data(data_id);
     Ok(())
@@ -254,45 +292,30 @@ fn main() -> Result<(), Error> {
     });
 
     let mut module = Module::<FaerieBackend>::new(make_builder("test.o"));
-    let int = module.pointer_type();
 
-    let mut func_builder_ctx = FunctionBuilderContext::<Variable>::new();
-
-    let mut context: codegen::Context = module.make_context();
-    context.func.signature.params.push(AbiParam::new(int));
-    context.func.signature.params.push(AbiParam::new(int));
-    context.func.signature.returns.push(AbiParam::new(int));
-
+    let codegen_context = RefCell::new(module.make_context());
     {
-        let builder = FunctionBuilder::<Variable>::new(&mut context.func, &mut func_builder_ctx);
-        let mut trans = Translator::new(&mut module, builder);
-        let entry_ebb = trans.builder.create_ebb();
-        trans.builder.append_ebb_params_for_function_params(entry_ebb);
-        trans.builder.switch_to_block(entry_ebb);
-        trans.builder.seal_block(entry_ebb);
+        let mut func_builder_ctx = FunctionBuilderContext::<Variable>::new();
+        let mut ctx = codegen_context.borrow_mut();
+        let builder = FunctionBuilder::<Variable>::new(&mut ctx.func, &mut func_builder_ctx);
+        let mut trans = Translator::new(&mut module, builder, &codegen_context);
 
         println!("parsed: {:?}", items);
 
-        let return_value = trans.translate_block_expressions(items, None);
-        trans.builder.ins().return_(&[return_value]);
-        trans.builder.finalize();
+        trans.translate_block_expressions(items, None);
     }
 
+    /*
     {
         let flags = settings::Flags::new(settings::builder());
-        verify_function(&context.func, &flags).unwrap_or_else(|e| {
+        verify_function(&codegen_context.borrow_mut().func, &flags).unwrap_or_else(|e| {
             eprintln!("error verifying function: {:?}", e);
         });
 
-        println!("{}", context.func.display(None));
+        println!("{}", codegen_context.borrow_mut().func.display(None));
     }
 
-    let id = module.declare_function("main", Linkage::Export, &context.func.signature)?;
-    module.define_function(id, &mut context).unwrap();
-    module.clear_context(&mut context);
-    
-    module.finalize_function(id);
-
+    */
     let product = module.finish();
     let file = File::create(product.name()).expect("error opening file");
     product.write(file).expect("error writing to file");

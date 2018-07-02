@@ -1,3 +1,4 @@
 #!/bin/bash
 
-cargo watch -d 0.1 -q -i "test*" -s "clear && cargo build --release && ./go release"
+# cargo watch -d 0.1 -q -i "test*" -s "clear && cargo build --release && ./go release"
+cargo watch -d 0.1 -q -i "test*" -s "clear && cargo build && ./go debug"
