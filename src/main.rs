@@ -66,6 +66,7 @@ impl Scope {
 struct Translator<'a> {
     builder: FunctionBuilder<'a, Variable>,
     codegen_context: &'a RefCell<codegen::Context>,
+    publish_function: 
     module: &'a mut Module<FaerieBackend>,
     scopes: Vec<Scope>,
     next_variable_index: usize,
@@ -211,13 +212,7 @@ impl<'a> Translator<'a> {
                     Expr::Func { .. } => {
                         let func_value = self.translate_expr(*expr);
 
-                        let id = self.module.declare_function(&name, Linkage::Export, &self.builder.func.signature).unwrap();
-                        {
-                            let codegen_context = &mut self.codegen_context.borrow_mut();
-                            self.module.define_function(id, codegen_context).expect("error defining module function");
-                            self.module.clear_context(codegen_context);
-                            self.module.finalize_function(id);
-                        }
+                        self.publish_function(self.builder.func.clone()); // TODO: is there a way to do this without cloning?
 
                         func_value
                     }
@@ -284,8 +279,12 @@ fn _define_data<T>(module: &mut Module<T>) -> Result<(), Error>
 }
 
 fn main() -> Result<(), Error> {
-    let mut input = String::new();
-    File::open("hello.eck")?.read_to_string(&mut input)?;
+    let input = {
+        let mut inp = String::new();
+        File::open("hello.eck")?.read_to_string(&mut inp)?;
+        inp
+    };
+
     let items = parser::module(&input).unwrap_or_else(|e| {
         eprintln!("error parsing: {:?}", e);
         std::process::exit(1);
@@ -293,29 +292,28 @@ fn main() -> Result<(), Error> {
 
     let mut module = Module::<FaerieBackend>::new(make_builder("test.o"));
 
-    let codegen_context = RefCell::new(module.make_context());
+    let codegen_context = module.make_context();
     {
         let mut func_builder_ctx = FunctionBuilderContext::<Variable>::new();
         let mut ctx = codegen_context.borrow_mut();
         let builder = FunctionBuilder::<Variable>::new(&mut ctx.func, &mut func_builder_ctx);
-        let mut trans = Translator::new(&mut module, builder, &codegen_context);
+        let mut trans = Translator::new(&mut module, builder);
+
 
         println!("parsed: {:?}", items);
 
         trans.translate_block_expressions(items, None);
     }
 
-    /*
-    {
+    /* {
         let flags = settings::Flags::new(settings::builder());
         verify_function(&codegen_context.borrow_mut().func, &flags).unwrap_or_else(|e| {
             eprintln!("error verifying function: {:?}", e);
         });
 
         println!("{}", codegen_context.borrow_mut().func.display(None));
-    }
+    } */
 
-    */
     let product = module.finish();
     let file = File::create(product.name()).expect("error opening file");
     product.write(file).expect("error writing to file");
